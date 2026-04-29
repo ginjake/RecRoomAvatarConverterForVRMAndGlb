@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Logs
+*.log
+
+# Blender output / work files
+out/
+*.blend1
+
+# Third-party Blender addons (not source code of this project)
+VRM_Addon_for_Blender-release/
+vendor/
+
+# User config (use recroom_converter.example.toml as template)
+recroom_converter.toml
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
