@@ -2,8 +2,8 @@
 
 # Rec Room VRM Converter
 
-Rec Roomのアバター書き出し `.glb` を、  
-clusterなどで使いやすいHumanoid VRMやResoniteで扱いやすいリグ付きglbに変換するWindows向けツールです。
+Rec Roomからエクスポートしたアバターを、  
+cluster用のVRMやResoniteで扱いやすいリグ付きglbに変換するWindows向けツールです。
 
 This is a Windows tool that converts Rec Room avatar export `.glb` files into Humanoid VRM files for platforms such as cluster.
 
@@ -16,7 +16,7 @@ This is a Windows tool that converts Rec Room avatar export `.glb` files into Hu
 
 2. Blender5.1(https://www.blender.org/download/) をダウンロードしてください。(Blenderを触る必要はありませんが、Blenderの内部機能を利用します)
 
-3. GitHub Releasesから配布用zipをダウンロードします。
+3. GitHub Releasesから配布用zip(https://github.com/ginjake/RecRoomAvatarConverterForVRMAndGlb/releases/tag/1.0)をダウンロードします。
 4. zipを展開します。
 5. `RecRoomVrmConverter.exe` を起動します。
 6. 変換元のGLBと、保存先を選びます。
