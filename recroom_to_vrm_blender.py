@@ -338,6 +338,8 @@ def install_addon_from_source(source: Path) -> bool:
             return False
 
     if source.is_dir():
+        if (source / "io_scene_vrm").is_dir():
+            source = source / "io_scene_vrm"
         sanitized_name = source.name.replace("-", "_").replace(" ", "_")
         target = user_addon_dir / sanitized_name
         legacy_target = user_addon_dir / source.name
@@ -362,10 +364,26 @@ def install_addon_from_source(source: Path) -> bool:
     return False
 
 
+def bundled_data_dir() -> Path:
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
 def find_candidate_vrm_addon_sources(explicit_source: str | None) -> list[Path]:
     candidates: list[Path] = []
     if explicit_source:
         candidates.append(Path(explicit_source))
+
+    bundled_root = bundled_data_dir()
+    candidates.extend(
+        [
+            bundled_root / "vendor" / "VRM-Addon-for-Blender" / "src" / "io_scene_vrm",
+            bundled_root / "vendor" / "VRM-Addon-for-Blender" / "src",
+            bundled_root / "io_scene_vrm",
+        ]
+    )
 
     blender_root = Path.home() / "AppData" / "Roaming" / "Blender Foundation" / "Blender"
     if blender_root.exists():
@@ -381,6 +399,14 @@ def find_candidate_vrm_addon_sources(explicit_source: str | None) -> list[Path]:
                     candidates.append(child)
                 elif child.suffix.lower() == ".zip" and "vrm" in child.name.lower():
                     candidates.append(child)
+
+            extension_dir = version_dir / "extensions"
+            if extension_dir.is_dir():
+                for child in extension_dir.rglob("*"):
+                    if child.is_dir() and child.name.lower() in {"vrm", "io_scene_vrm"}:
+                        candidates.append(child)
+                    elif child.is_file() and child.suffix.lower() == ".zip" and "vrm" in child.name.lower():
+                        candidates.append(child)
 
     downloads_dir = Path.home() / "Downloads"
     if downloads_dir.exists():

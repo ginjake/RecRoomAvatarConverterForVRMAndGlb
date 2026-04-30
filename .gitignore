@@ -9,17 +9,35 @@ __pycache__/
 build/
 dist/
 *.spec
+!RecRoomVrmConverter.spec
+*.exe
 
 # Logs
 *.log
 
 # Blender output / work files
 out/
+*.blend
 *.blend1
+*.glb
+*.gltf
+*.vrm
 
 # Third-party Blender addons (not source code of this project)
 VRM_Addon_for_Blender-release/
 vendor/
+
+# Release archives / redistributable packages
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+
+# Rec Room exported avatar data
+AvatarData*/
+AvatarData_*/
 
 # User config (use recroom_converter.example.toml as template)
 recroom_converter.toml

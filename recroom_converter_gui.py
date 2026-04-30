@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from convert_recroom_avatar import (
     ConversionRequest,
     append_log_line,
+    default_vrm_addon_source,
     find_blender,
     load_config,
     resolve_vrm_addon_source,
@@ -27,7 +28,7 @@ class ConverterApp:
         self.input_var = tk.StringVar(master=self.root)
         self.output_var = tk.StringVar(master=self.root)
         self.blender_var = tk.StringVar(master=self.root, value=self._default_blender())
-        self.addon_var = tk.StringVar(master=self.root, value=self._default_addon())
+        self.addon_var = tk.StringVar(master=self.root)
         self.keep_blend_var = tk.BooleanVar(master=self.root, value=True)
 
         self._build_ui()
@@ -40,7 +41,7 @@ class ConverterApp:
             return ""
 
     def _default_addon(self) -> str:
-        source = resolve_vrm_addon_source(None, self.config)
+        source = default_vrm_addon_source(self.config)
         return str(source) if source else ""
 
     def _build_ui(self) -> None:
@@ -51,8 +52,20 @@ class ConverterApp:
 
         self._path_row(frame, 0, "Input GLB", self.input_var, self._browse_input)
         self._path_row(frame, 1, "Output VRM", self.output_var, self._browse_output)
-        self._path_row(frame, 2, "Blender", self.blender_var, self._browse_blender)
-        self._path_row(frame, 3, "VRM Addon", self.addon_var, self._browse_addon)
+        self._path_row(
+            frame,
+            2,
+            "Blender（動作確認済み: 5.1 / tested: 5.1）",
+            self.blender_var,
+            self._browse_blender,
+        )
+        self._path_row(
+            frame,
+            3,
+            "VRMアドオン指定 / VRM Addon Path（通常は空欄 / usually blank）",
+            self.addon_var,
+            self._browse_addon,
+        )
 
         ttk.Checkbutton(
             frame,
@@ -136,7 +149,11 @@ class ConverterApp:
         output_path = Path(self.output_var.get()).resolve()
         blender_path = Path(self.blender_var.get()).resolve()
         addon_text = self.addon_var.get().strip()
-        addon_path = Path(addon_text).resolve() if addon_text else None
+        addon_path = (
+            resolve_vrm_addon_source(addon_text, self.config)
+            if addon_text
+            else default_vrm_addon_source(self.config)
+        )
 
         if not input_path.is_file():
             raise FileNotFoundError("Input GLB was not found.")

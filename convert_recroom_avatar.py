@@ -9,12 +9,7 @@ from typing import Callable
 
 
 DEFAULT_BLENDER_CANDIDATES = [
-    r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe",
-    r"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe",
-    r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
-    r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
     r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
-    r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
 ]
 
 
@@ -126,6 +121,10 @@ def resolve_vrm_addon_source(
         if source.exists():
             return source.resolve()
     return None
+
+
+def default_vrm_addon_source(config: ConverterConfig) -> Path | None:
+    return resolve_vrm_addon_source(None, config)
 
 
 def build_request(args: argparse.Namespace, config: ConverterConfig) -> ConversionRequest:
