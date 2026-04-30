@@ -1,4 +1,5 @@
-<img width="1536" height="1024" alt="Rec Room VRM Converter" src="https://github.com/user-attachments/assets/02fd4372-11f1-4a56-84b5-29c885b7c982" />
+<img width="1536" height="1024" alt="ChatGPT Image 2026年4月30日 18_48_51" src="https://github.com/user-attachments/assets/5232cab2-9941-4ea9-b5af-a17a17ee9439" />
+
 
 # Rec Room VRM Converter
 
