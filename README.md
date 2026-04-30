@@ -10,17 +10,17 @@ This is a Windows tool that converts Rec Room avatar export `.glb` files into Hu
 
 ## How to Use / 使い方
 
-RecRoomから下記の設定アバターをExportしてください。
+1. RecRoomから下記の設定アバターをExportしてください。
 足付きは対応していません。
 <img width="1749" height="1054" alt="image" src="https://github.com/user-attachments/assets/ff569f31-e229-4bc2-a717-dcf3ebb27db0" />
 
+2. Blender5.1(https://www.blender.org/download/) をダウンロードしてください。(Blenderを触る必要はありませんが、Blenderの内部機能を利用します)
 
-
-1. GitHub Releasesから配布用zipをダウンロードします。
-2. zipを展開します。
-3. `RecRoomVrmConverter.exe` を起動します。
-4. 変換元のGLBと、保存先を選びます。
-5. `Convert` を押します。
+3. GitHub Releasesから配布用zipをダウンロードします。
+4. zipを展開します。
+5. `RecRoomVrmConverter.exe` を起動します。
+6. 変換元のGLBと、保存先を選びます。
+7. `Convert` を押します。
 <img width="887" height="641" alt="image" src="https://github.com/user-attachments/assets/c9e48e44-2929-4e0e-80be-8656c9e5c4ba" />
 6. VRMとrig付きのglbとblendファイルが生成されていれば成功です
 
