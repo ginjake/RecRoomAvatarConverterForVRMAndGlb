@@ -1520,6 +1520,26 @@ def try_setup_vrm(
     reference = meta.references.add()
     reference.value = "Rec Room avatar auto-converted to VRM"
 
+    # Move the first-person reference point slightly above and in front of the
+    # head, and hide torso/head meshes in first-person VR views when supported.
+    ext.vrm1.look_at.offset_from_head_bone = (-0.04, 0.10, 0.0)
+    first_person = ext.vrm1.first_person
+    first_person.mesh_annotations.clear()
+    first_person_mesh_types = {
+        "MergedBody": "thirdPersonOnly",
+        "MergedHead": "thirdPersonOnly",
+        "MergedLeftHand": "both",
+        "MergedRightHand": "both",
+        "Merged_FootPlaceholder_Mat": "thirdPersonOnly",
+    }
+    for object_name, first_person_type in first_person_mesh_types.items():
+        obj = bpy.data.objects.get(object_name)
+        if not obj or obj.type != "MESH":
+            continue
+        annotation = first_person.mesh_annotations.add()
+        annotation.node.mesh_object_name = obj.name
+        annotation.type = first_person_type
+
     human_bones = ext.vrm1.humanoid.human_bones
     human_bones.filter_by_human_bone_hierarchy = False
     human_bones.allow_non_humanoid_rig = False
