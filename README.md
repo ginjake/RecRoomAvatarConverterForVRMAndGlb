@@ -1,20 +1,31 @@
+<img width="1536" height="1024" alt="ChatGPT Image 2026年4月30日 17_01_55" src="https://github.com/user-attachments/assets/02fd4372-11f1-4a56-84b5-29c885b7c982" />
+
 # Rec Room VRM Converter
 
-Rec Roomのアバター書き出し `.glb` を、clusterなどで使いやすいHumanoid VRMに変換するWindows向けツールです。
+Rec Roomのアバター書き出し `.glb` を、clusterなどで使いやすいHumanoid VRMやResoniteで扱いやすいリグ付きglbに変換するWindows向けツールです。
 
 This is a Windows tool that converts Rec Room avatar export `.glb` files into Humanoid VRM files for platforms such as cluster.
 
-## For Users / 利用者向け
+返還前
+<img width="664" height="1025" alt="image" src="https://github.com/user-attachments/assets/1b880077-2434-443c-9035-e82bd8537cad" />
+<img width="641" height="1006" alt="image" src="https://github.com/user-attachments/assets/2e99b22e-6eef-4beb-9a17-1b94c88a6b9d" />
 
-通常の利用者はコマンド操作やPython環境の作成は不要です。
 
-End users do not need to use commands or set up Python.
+## How to Use / 使い方
+
+RecRoomから下記の設定アバターをExportしてください。
+足付きは対応していません。
+<img width="1749" height="1054" alt="image" src="https://github.com/user-attachments/assets/ff569f31-e229-4bc2-a717-dcf3ebb27db0" />
+
+
 
 1. GitHub Releasesから配布用zipをダウンロードします。
 2. zipを展開します。
 3. `RecRoomVrmConverter.exe` を起動します。
-4. 入力GLBと出力VRMの保存先を選びます。
+4. 変換元のGLBと、保存先を選びます。
 5. `Convert` を押します。
+<img width="887" height="641" alt="image" src="https://github.com/user-attachments/assets/c9e48e44-2929-4e0e-80be-8656c9e5c4ba" />
+6. VRMとrig付きのglbとblendファイルが生成されていれば成功です
 
 1. Download the release zip from GitHub Releases.
 2. Extract the zip.
@@ -42,8 +53,6 @@ Normally, you do not need to select a VRM Addon manually. The release package in
 - This tool does not support Rec Room avatars with legs.
 - Rec Roomの標準的な上半身アバター書き出しを対象にしています。
 - It targets the standard upper-body Rec Room avatar export layout.
-- 足ボーンはclusterなどのHumanoid判定用のプレースホルダーです。
-- Leg bones are placeholders for Humanoid validation on platforms such as cluster.
 - 複雑な衣装やアクセサリでは、メッシュ分類やウェイトに追加調整が必要になる場合があります。
 - Complex outfits or accessories may still require classifier or weight adjustments.
 
