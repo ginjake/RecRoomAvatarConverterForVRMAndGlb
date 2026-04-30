@@ -50,12 +50,24 @@ class ConverterApp:
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(5, weight=1)
 
-        self._path_row(frame, 0, "Input GLB", self.input_var, self._browse_input)
-        self._path_row(frame, 1, "Output VRM", self.output_var, self._browse_output)
+        self._path_row(
+            frame,
+            0,
+            "Input GLB（読み込むRecRoomアバター）",
+            self.input_var,
+            self._browse_input,
+        )
+        self._path_row(
+            frame,
+            1,
+            "保存先（VRM / rig付きGLB / blend）",
+            self.output_var,
+            self._browse_output,
+        )
         self._path_row(
             frame,
             2,
-            "Blender（動作確認済み: 5.1 / tested: 5.1）",
+            "Blender（5.1で動作確認済み）",
             self.blender_var,
             self._browse_blender,
         )
@@ -69,7 +81,7 @@ class ConverterApp:
 
         ttk.Checkbutton(
             frame,
-            text="Keep intermediate .blend file",
+            text="確認用の .blend ファイルも保存する / Save inspection .blend file",
             variable=self.keep_blend_var,
         ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 8))
 
@@ -117,7 +129,7 @@ class ConverterApp:
 
     def _browse_output(self) -> None:
         path = filedialog.asksaveasfilename(
-            title="Select Output VRM",
+            title="保存先を選択",
             defaultextension=".vrm",
             filetypes=[("VRM", "*.vrm")],
         )

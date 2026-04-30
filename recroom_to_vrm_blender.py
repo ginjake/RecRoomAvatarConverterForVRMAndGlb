@@ -227,17 +227,29 @@ def is_hand_attached_object(obj: bpy.types.Object) -> bool:
 
 
 def cleanup_scene() -> None:
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete()
+    ensure_object_mode()
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
     for datablock in (
         bpy.data.meshes,
         bpy.data.materials,
         bpy.data.images,
         bpy.data.armatures,
+        bpy.data.cameras,
+        bpy.data.lights,
     ):
         for item in list(datablock):
             if not item.users:
                 datablock.remove(item)
+
+
+def remove_unexported_scene_objects(
+    armature: bpy.types.Object, exported_meshes: list[bpy.types.Object]
+) -> None:
+    keep = {armature, *exported_meshes}
+    for obj in list(bpy.data.objects):
+        if obj not in keep:
+            bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def find_vrm_module_names() -> list[str]:
@@ -349,6 +361,9 @@ def install_addon_from_source(source: Path) -> bool:
             if target.exists():
                 shutil.rmtree(target)
             shutil.copytree(source, target)
+            user_addon_dir_text = str(user_addon_dir)
+            if user_addon_dir_text not in sys.path:
+                sys.path.insert(0, user_addon_dir_text)
             importlib.invalidate_caches()
             addon_utils.modules_refresh()
             try:
@@ -1550,10 +1565,14 @@ def try_setup_vrm(
 
 def export_rigged_glb(output_path: Path) -> Path:
     rigged_glb = output_path.with_name(output_path.stem + ".rigged.glb")
+    deselect_all()
+    for obj in bpy.data.objects:
+        if obj.type in {"ARMATURE", "MESH"}:
+            obj.select_set(True)
     bpy.ops.export_scene.gltf(
         filepath=str(rigged_glb),
         export_format="GLB",
-        use_selection=False,
+        use_selection=True,
         export_skins=True,
         export_yup=True,
     )
@@ -1603,6 +1622,7 @@ def main() -> None:
     print(f"Placeholder foot boxes: {len(foot_boxes)}")
     consolidated = consolidate_meshes_for_cluster(armature, groups, named_bones)
     align_joined_hand_meshes_to_hand_bones(armature, named_bones)
+    remove_unexported_scene_objects(armature, consolidated)
     print(f"Consolidated mesh objects for export: {len(consolidated)}")
 
     rigged_glb = export_rigged_glb(output_path)

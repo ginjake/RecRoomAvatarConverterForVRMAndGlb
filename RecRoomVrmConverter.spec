@@ -11,6 +11,22 @@ datas = [
         str(project_root / "vendor" / "VRM-Addon-for-Blender" / "src" / "io_scene_vrm"),
         "vendor/VRM-Addon-for-Blender/src/io_scene_vrm",
     ),
+    (
+        str(project_root / "vendor" / "VRM-Addon-for-Blender" / "LICENSE_MAIN.txt"),
+        "vendor/VRM-Addon-for-Blender",
+    ),
+    (
+        str(project_root / "vendor" / "VRM-Addon-for-Blender" / "LICENSE_(OPTION1)_MIT.txt"),
+        "vendor/VRM-Addon-for-Blender",
+    ),
+    (
+        str(project_root / "vendor" / "VRM-Addon-for-Blender" / "LICENSE_(OPTION2)_GPL-3_0.txt"),
+        "vendor/VRM-Addon-for-Blender",
+    ),
+    (
+        str(project_root / "vendor" / "VRM-Addon-for-Blender" / "Notice.txt"),
+        "vendor/VRM-Addon-for-Blender",
+    ),
 ]
 
 hiddenimports = []
