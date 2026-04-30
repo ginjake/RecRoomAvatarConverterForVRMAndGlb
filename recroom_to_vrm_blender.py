@@ -79,6 +79,13 @@ def bounds_size(bounds: tuple[Vector, Vector]) -> Vector:
     return bounds[1] - bounds[0]
 
 
+def bounds_distance(a: tuple[Vector, Vector], b: tuple[Vector, Vector]) -> float:
+    dx = max(a[0].x - b[1].x, b[0].x - a[1].x, 0.0)
+    dy = max(a[0].y - b[1].y, b[0].y - a[1].y, 0.0)
+    dz = max(a[0].z - b[1].z, b[0].z - a[1].z, 0.0)
+    return Vector((dx, dy, dz)).length
+
+
 def combined_bounds(objects: list[bpy.types.Object]) -> tuple[Vector, Vector]:
     mins = []
     maxs = []
@@ -112,6 +119,15 @@ def rotate_mesh_geometry_around_z(
 def material_names(obj: bpy.types.Object) -> list[str]:
     if obj.type != "MESH":
         return []
+    if obj.data.polygons:
+        material_indices = {polygon.material_index for polygon in obj.data.polygons}
+        used_materials = [
+            obj.material_slots[index].material.name
+            for index in sorted(material_indices)
+            if index < len(obj.material_slots) and obj.material_slots[index].material
+        ]
+        if used_materials:
+            return used_materials
     return [slot.material.name for slot in obj.material_slots if slot.material]
 
 
@@ -148,6 +164,8 @@ def is_strict_head_material_name(name: str) -> bool:
         "avatarface",
         "face",
         "hair",
+        "hat",
+        "headscarf",
         "glasses",
         "aviator",
         "eye",
@@ -471,6 +489,17 @@ def classify_parts(
     head_attached_objects: list[bpy.types.Object] = []
     for obj in head_attached_sources:
         head_attached_objects.extend(separate_loose_parts(obj))
+    face_reference_objects = [
+        obj
+        for obj in head_attached_objects
+        if any(
+            "AvatarFace" in name or "Face" in name
+            for name in material_names(obj)
+        )
+    ]
+    face_reference_bounds = (
+        combined_bounds(face_reference_objects) if face_reference_objects else None
+    )
 
     hand_attached_sources = [
         obj
@@ -523,11 +552,12 @@ def classify_parts(
             skin_shoulder_head_cutoff_z = lower[1][1].z + gap * 0.5
     if largest_gap < max(full_size.z * 0.025, 0.025):
         skin_shoulder_head_cutoff_z = None
+    face_neighbor_distance = max(full_size.x * 0.08, 0.035)
 
     head_parts: list[bpy.types.Object] = []
     left_hand_parts: list[bpy.types.Object] = []
     right_hand_parts: list[bpy.types.Object] = []
-    body_parts: list[bpy.types.Object] = list(other_objects)
+    body_parts: list[bpy.types.Object] = []
     separated_info: list[tuple[bpy.types.Object, Vector]] = []
 
     for obj in separated:
@@ -541,8 +571,35 @@ def classify_parts(
             right_hand_parts.append(obj)
             continue
         if center.z >= head_z_threshold:
+            is_skin_part = any("Skin_Mat" in name for name in material_names(obj))
             if (
-                any("Skin_Mat" in name for name in material_names(obj))
+                is_skin_part
+                and face_reference_bounds is not None
+                and bounds_distance(bounds, face_reference_bounds) <= face_neighbor_distance
+                and bounds[1].z >= face_reference_bounds[0].z - max(full_size.z * 0.02, 0.02)
+            ):
+                head_parts.append(obj)
+                continue
+            if (
+                is_skin_part
+                and face_reference_bounds is not None
+                and bounds[0].z >= face_reference_bounds[0].z + max(full_size.z * 0.03, 0.03)
+            ):
+                head_parts.append(obj)
+                continue
+            if (
+                is_skin_part
+                and face_reference_bounds is not None
+                and bounds_distance(bounds, face_reference_bounds) <= face_neighbor_distance
+                and (
+                    skin_shoulder_head_cutoff_z is None
+                    or center.z >= skin_shoulder_head_cutoff_z
+                )
+            ):
+                head_parts.append(obj)
+                continue
+            if (
+                is_skin_part
                 and skin_shoulder_head_cutoff_z is not None
                 and bounds[1].z < skin_shoulder_head_cutoff_z
             ):
@@ -554,9 +611,16 @@ def classify_parts(
 
     for obj in head_attached_objects:
         center = bounds_center(object_bounds_world(obj))
-        if is_body_attached_object(obj):
+        if is_strict_head_object(obj) or center.z >= head_z_threshold:
+            head_parts.append(obj)
+        elif is_body_attached_object(obj):
             body_parts.append(obj)
-        elif is_strict_head_object(obj) or center.z >= head_z_threshold:
+        else:
+            body_parts.append(obj)
+
+    for obj in other_objects:
+        center = bounds_center(object_bounds_world(obj))
+        if center.z >= head_z_threshold and not is_body_attached_object(obj):
             head_parts.append(obj)
         else:
             body_parts.append(obj)
