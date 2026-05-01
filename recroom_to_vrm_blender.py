@@ -10,6 +10,7 @@ from pathlib import Path
 
 import bpy
 from mathutils import Matrix, Vector
+from mathutils.kdtree import KDTree
 
 
 REQUIRED_VRM_BONES = [
@@ -142,7 +143,7 @@ def is_head_attached_material_name(name: str) -> bool:
         "glasses",
         "aviator",
         "eye",
-        "brow",
+        "eyebrow",
         "beard",
         "mustache",
         "moustache",
@@ -169,7 +170,7 @@ def is_strict_head_material_name(name: str) -> bool:
         "glasses",
         "aviator",
         "eye",
-        "brow",
+        "eyebrow",
         "beard",
         "mustache",
         "moustache",
@@ -224,6 +225,27 @@ def is_hand_attached_material_name(name: str) -> bool:
 def is_hand_attached_object(obj: bpy.types.Object) -> bool:
     names = [obj.name] + material_names(obj)
     return any(is_hand_attached_material_name(name) for name in names)
+
+
+def rig_reference_meshes(meshes: list[bpy.types.Object]) -> list[bpy.types.Object]:
+    try:
+        return [identify_skin_object(meshes)]
+    except RuntimeError:
+        return meshes
+
+
+def bounds_axis_distance(
+    value: float, minimum: float, maximum: float
+) -> float:
+    if minimum <= value <= maximum:
+        return 0.0
+    return min(abs(value - minimum), abs(value - maximum))
+
+
+def object_vertices_world(obj: bpy.types.Object) -> list[Vector]:
+    if obj.type != "MESH":
+        return []
+    return [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
 
 
 def cleanup_scene() -> None:
@@ -515,6 +537,51 @@ def identify_skin_object(meshes: list[bpy.types.Object]) -> bpy.types.Object:
     raise RuntimeError("Could not find the Rec Room skin mesh.")
 
 
+def select_rig_body_parts(
+    head_parts: list[bpy.types.Object],
+    body_parts: list[bpy.types.Object],
+    all_bounds: tuple[Vector, Vector],
+) -> list[bpy.types.Object]:
+    if not head_parts or not body_parts:
+        return body_parts
+
+    head_bounds = combined_bounds(head_parts)
+    head_center = bounds_center(head_bounds)
+    full_size = bounds_size(all_bounds)
+    max_x_distance = max(full_size.x * 0.12, 0.08)
+    max_y_distance = max(full_size.y * 0.18, 0.08)
+    torso_floor_z = all_bounds[0].z + full_size.z * 0.20
+
+    under_head: list[bpy.types.Object] = []
+    for obj in body_parts:
+        bounds = object_bounds_world(obj)
+        if bounds[1].z < torso_floor_z:
+            continue
+        if bounds[0].z > head_bounds[0].z:
+            continue
+        x_distance = bounds_axis_distance(head_center.x, bounds[0].x, bounds[1].x)
+        y_distance = bounds_axis_distance(head_center.y, bounds[0].y, bounds[1].y)
+        if x_distance <= max_x_distance and y_distance <= max_y_distance:
+            under_head.append(obj)
+
+    if under_head:
+        return under_head
+
+    def xy_distance_to_head(obj: bpy.types.Object) -> float:
+        bounds = object_bounds_world(obj)
+        x_distance = bounds_axis_distance(head_center.x, bounds[0].x, bounds[1].x)
+        y_distance = bounds_axis_distance(head_center.y, bounds[0].y, bounds[1].y)
+        return (x_distance * x_distance + y_distance * y_distance) ** 0.5
+
+    nearest = min(body_parts, key=xy_distance_to_head)
+    nearest_distance = xy_distance_to_head(nearest)
+    return [
+        obj
+        for obj in body_parts
+        if xy_distance_to_head(obj) <= nearest_distance + max(full_size.x * 0.04, 0.03)
+    ]
+
+
 def classify_parts(
     original_meshes: list[bpy.types.Object],
 ) -> dict[str, list[bpy.types.Object]]:
@@ -613,6 +680,9 @@ def classify_parts(
             continue
         if center.z >= head_z_threshold:
             is_skin_part = any("Skin_Mat" in name for name in material_names(obj))
+            if is_body_attached_object(obj) and not is_strict_head_object(obj):
+                body_parts.append(obj)
+                continue
             if (
                 is_skin_part
                 and face_reference_bounds is not None
@@ -652,7 +722,9 @@ def classify_parts(
 
     for obj in head_attached_objects:
         center = bounds_center(object_bounds_world(obj))
-        if is_strict_head_object(obj) or center.z >= head_z_threshold:
+        if is_body_attached_object(obj) and not is_strict_head_object(obj):
+            body_parts.append(obj)
+        elif is_strict_head_object(obj) or center.z >= head_z_threshold:
             head_parts.append(obj)
         elif is_body_attached_object(obj):
             body_parts.append(obj)
@@ -725,6 +797,78 @@ def classify_parts(
             move_from_body_to_hand(obj, hand_parts)
         return len(selected)
 
+    def move_adjacent_body_parts_to_hand(
+        hand_parts: list[bpy.types.Object],
+        opposite_hand_parts: list[bpy.types.Object],
+        side: str,
+    ) -> int:
+        if not hand_parts:
+            return 0
+        hand_bounds = combined_bounds(hand_parts)
+        hand_center = bounds_center(hand_bounds)
+        neighbor_distance = max(full_size.x * 0.035, 0.025)
+        height_margin = max(full_size.z * 0.08, 0.05)
+        moved = 0
+        for obj in list(body_parts):
+            if obj in head_parts or obj in opposite_hand_parts:
+                continue
+            bounds = object_bounds_world(obj)
+            center = bounds_center(bounds)
+            if side == "left" and center.x <= hand_center.x:
+                continue
+            if side == "right" and center.x >= hand_center.x:
+                continue
+            if bounds[1].z < hand_bounds[0].z - height_margin:
+                continue
+            if bounds[0].z > hand_bounds[1].z + height_margin:
+                continue
+            if bounds_distance(bounds, hand_bounds) > neighbor_distance:
+                continue
+            move_from_body_to_hand(obj, hand_parts)
+            moved += 1
+        return moved
+
+    def move_vertex_adjacent_parts_to_head() -> int:
+        if not head_parts:
+            return 0
+
+        head_vertices: list[Vector] = []
+        for obj in head_parts:
+            head_vertices.extend(object_vertices_world(obj))
+        if not head_vertices:
+            return 0
+
+        tree = KDTree(len(head_vertices))
+        for index, vertex in enumerate(head_vertices):
+            tree.insert(vertex, index)
+        tree.balance()
+
+        head_bounds = combined_bounds(head_parts)
+        head_floor = head_bounds[0].z
+        adjacency_distance = max(full_size.z * 0.012, 0.012)
+        head_lower_margin = max(full_size.z * 0.10, 0.06)
+        moved = 0
+
+        for obj in list(body_parts):
+            if is_body_attached_object(obj) and not is_strict_head_object(obj):
+                continue
+            if is_hand_attached_object(obj):
+                continue
+            bounds = object_bounds_world(obj)
+            if bounds[1].z < head_floor - head_lower_margin:
+                continue
+            if bounds_distance(bounds, head_bounds) > adjacency_distance:
+                continue
+            if any(
+                tree.find(vertex)[2] <= adjacency_distance
+                for vertex in object_vertices_world(obj)
+            ):
+                body_parts.remove(obj)
+                head_parts.append(obj)
+                moved += 1
+
+        return moved
+
     fallback_left_count = fill_missing_hand_from_side(left_hand_parts, "left")
     fallback_right_count = fill_missing_hand_from_side(right_hand_parts, "right")
     if fallback_left_count or fallback_right_count:
@@ -743,10 +887,35 @@ def classify_parts(
         else:
             right_hand_parts.append(obj)
 
+    adjacent_left_count = move_adjacent_body_parts_to_hand(
+        left_hand_parts, right_hand_parts, "left"
+    )
+    adjacent_right_count = move_adjacent_body_parts_to_hand(
+        right_hand_parts, left_hand_parts, "right"
+    )
+    if adjacent_left_count or adjacent_right_count:
+        print(
+            "Adjacent hand mesh detection used: "
+            f"left_added={adjacent_left_count}, "
+            f"right_added={adjacent_right_count}, "
+            f"left_total={len(left_hand_parts)}, "
+            f"right_total={len(right_hand_parts)}"
+        )
+
+    adjacent_head_count = move_vertex_adjacent_parts_to_head()
+    if adjacent_head_count:
+        print(
+            "Adjacent head mesh detection used: "
+            f"head_added={adjacent_head_count}, "
+            f"head_total={len(head_parts)}"
+        )
+
     final_meshes: list[bpy.types.Object] = []
     for obj in head_parts + left_hand_parts + right_hand_parts + body_parts:
         if obj and obj.name in bpy.data.objects and obj not in final_meshes:
             final_meshes.append(obj)
+
+    rig_body_final = select_rig_body_parts(head_parts, body_parts, all_bounds)
 
     return {
         "all": final_meshes,
@@ -754,6 +923,7 @@ def classify_parts(
         "left_hand": left_hand_parts,
         "right_hand": right_hand_parts,
         "body": body_parts,
+        "rig_body": rig_body_final,
     }
 
 
@@ -779,7 +949,7 @@ def create_armature(groups: dict[str, list[bpy.types.Object]]) -> tuple[bpy.type
     all_bounds = combined_bounds(groups["all"])
     full_size = bounds_size(all_bounds)
     head_bounds = combined_bounds(groups["head"])
-    body_bounds = combined_bounds(groups["body"])
+    body_bounds = combined_bounds(groups.get("rig_body") or groups["body"])
     left_hand_bounds = combined_bounds(groups["right_hand"])
     right_hand_bounds = combined_bounds(groups["left_hand"])
 
@@ -1617,7 +1787,7 @@ def main() -> None:
     if not mesh_objects:
         raise RuntimeError("The imported GLB does not contain any mesh objects.")
 
-    import_bounds = combined_bounds(mesh_objects)
+    import_bounds = combined_bounds(rig_reference_meshes(mesh_objects))
     rotate_mesh_geometry_around_z(mesh_objects, pi, bounds_center(import_bounds))
 
     groups = classify_parts(mesh_objects)
