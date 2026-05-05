@@ -1664,7 +1664,7 @@ def consolidate_meshes_for_cluster(
 
     body_joined = join_mesh_objects(body_meshes, "MergedBody", armature)
     if body_joined:
-        assign_object_exclusively_to_bone(body_joined, named_bones["hips"])
+        assign_object_exclusively_to_bone(body_joined, named_bones["chest"])
         joined_objects.append(body_joined)
 
     left_joined = join_mesh_objects(list(left_hand_set), "MergedLeftHand", armature)
