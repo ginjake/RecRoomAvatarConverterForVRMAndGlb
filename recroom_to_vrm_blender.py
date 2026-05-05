@@ -1243,6 +1243,23 @@ def translate_mesh_geometry_world(objects: list[bpy.types.Object], delta: Vector
         obj.data.update()
 
 
+def rotate_mesh_geometry_world(
+    objects: list[bpy.types.Object], angle: float, axis: str, center: Vector
+) -> None:
+    transform = (
+        Matrix.Translation(center)
+        @ Matrix.Rotation(angle, 4, axis)
+        @ Matrix.Translation(-center)
+    )
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        inverse_world = obj.matrix_world.inverted()
+        for vertex in obj.data.vertices:
+            vertex.co = inverse_world @ (transform @ (obj.matrix_world @ vertex.co))
+        obj.data.update()
+
+
 def align_arm_bone_height_to_source_hands(
     groups: dict[str, list[bpy.types.Object]],
     armature: bpy.types.Object,
@@ -1363,6 +1380,23 @@ def align_joined_hand_meshes_to_hand_bones(
         bone_head = armature.matrix_world @ bone.head_local
         delta = bone_head - mesh_average_center(obj)
         translate_mesh_geometry_world([obj], delta)
+
+
+def rotate_joined_hand_meshes_around_hand_bone_x(
+    armature: bpy.types.Object, named_bones: dict[str, str]
+) -> None:
+    for object_name, bone_key in [
+        ("MergedLeftHand", "leftHand"),
+        ("MergedRightHand", "rightHand"),
+    ]:
+        obj = bpy.data.objects.get(object_name)
+        bone = armature.data.bones.get(named_bones[bone_key])
+        if not obj or not bone:
+            continue
+        bone_head = armature.matrix_world @ bone.head_local
+        bone_tail = armature.matrix_world @ bone.tail_local
+        bone_center = (bone_head + bone_tail) * 0.5
+        rotate_mesh_geometry_world([obj], pi * 0.5, "X", bone_center)
 
 
 def add_armature_modifier(obj: bpy.types.Object, armature: bpy.types.Object) -> None:
@@ -1812,6 +1846,7 @@ def main() -> None:
     print(f"Placeholder foot boxes: {len(foot_boxes)}")
     consolidated = consolidate_meshes_for_cluster(armature, groups, named_bones)
     align_joined_hand_meshes_to_hand_bones(armature, named_bones)
+    rotate_joined_hand_meshes_around_hand_bone_x(armature, named_bones)
     remove_unexported_scene_objects(armature, consolidated)
     print(f"Consolidated mesh objects for export: {len(consolidated)}")
 
