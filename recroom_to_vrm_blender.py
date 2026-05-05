@@ -1399,6 +1399,19 @@ def rotate_joined_hand_meshes_around_hand_bone_x(
         rotate_mesh_geometry_world([obj], pi * 0.5, "X", bone_center)
 
 
+def rotate_joined_head_mesh_around_head_bone_x(
+    armature: bpy.types.Object, named_bones: dict[str, str]
+) -> None:
+    obj = bpy.data.objects.get("MergedHead")
+    bone = armature.data.bones.get(named_bones["head"])
+    if not obj or not bone:
+        return
+    bone_head = armature.matrix_world @ bone.head_local
+    bone_tail = armature.matrix_world @ bone.tail_local
+    bone_center = (bone_head + bone_tail) * 0.5
+    rotate_mesh_geometry_world([obj], pi / 12.0, "X", bone_center)
+
+
 def add_armature_modifier(obj: bpy.types.Object, armature: bpy.types.Object) -> None:
     modifier = obj.modifiers.get("Armature")
     if not modifier:
@@ -1847,6 +1860,7 @@ def main() -> None:
     consolidated = consolidate_meshes_for_cluster(armature, groups, named_bones)
     align_joined_hand_meshes_to_hand_bones(armature, named_bones)
     rotate_joined_hand_meshes_around_hand_bone_x(armature, named_bones)
+    rotate_joined_head_mesh_around_head_bone_x(armature, named_bones)
     remove_unexported_scene_objects(armature, consolidated)
     print(f"Consolidated mesh objects for export: {len(consolidated)}")
 
