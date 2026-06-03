@@ -1,9 +1,11 @@
 import argparse
 import addon_utils
 import importlib
+import json
 import os
 import re
 import shutil
+import struct
 import sys
 from math import pi
 from pathlib import Path
@@ -1800,19 +1802,390 @@ def try_setup_vrm(
     return True
 
 
-def export_rigged_glb(output_path: Path) -> Path:
-    rigged_glb = output_path.with_name(output_path.stem + ".rigged.glb")
-    deselect_all()
+def detach_meshes_from_armature_for_gltf(
+    armature: bpy.types.Object,
+) -> list[tuple[bpy.types.Object, bpy.types.Object | None, Matrix, Matrix]]:
+    detached: list[tuple[bpy.types.Object, bpy.types.Object | None, Matrix, Matrix]] = []
     for obj in bpy.data.objects:
-        if obj.type in {"ARMATURE", "MESH"}:
-            obj.select_set(True)
-    bpy.ops.export_scene.gltf(
-        filepath=str(rigged_glb),
-        export_format="GLB",
-        use_selection=True,
-        export_skins=True,
-        export_yup=True,
+        if obj.type != "MESH" or obj.parent != armature:
+            continue
+        parent = obj.parent
+        parent_inverse = obj.matrix_parent_inverse.copy()
+        world_matrix = obj.matrix_world.copy()
+        obj.parent = None
+        obj.matrix_world = world_matrix
+        detached.append((obj, parent, parent_inverse, world_matrix))
+    return detached
+
+
+def restore_detached_mesh_parents(
+    detached: list[tuple[bpy.types.Object, bpy.types.Object | None, Matrix, Matrix]]
+) -> None:
+    for obj, parent, parent_inverse, world_matrix in detached:
+        obj.parent = parent
+        obj.matrix_parent_inverse = parent_inverse
+        obj.matrix_world = world_matrix
+
+
+def patch_gltf_scene_roots_for_detached_armature(
+    glb_path: Path, armature_name: str
+) -> None:
+    data = glb_path.read_bytes()
+    if data[:4] != b"glTF":
+        raise RuntimeError(f"Not a GLB file: {glb_path}")
+
+    version, length = struct.unpack_from("<II", data, 4)
+    offset = 12
+    chunks: list[tuple[int, bytes]] = []
+    gltf: dict | None = None
+    while offset < length:
+        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = data[offset : offset + chunk_length]
+        offset += chunk_length
+        if chunk_type == 0x4E4F534A:
+            gltf = json.loads(chunk.rstrip(b" \t\r\n\0").decode("utf-8"))
+        else:
+            chunks.append((chunk_type, chunk))
+
+    if gltf is None:
+        raise RuntimeError(f"GLB JSON chunk was not found: {glb_path}")
+
+    nodes = gltf.get("nodes", [])
+    armature_node_index = next(
+        (
+            index
+            for index, node in enumerate(nodes)
+            if node.get("name") == armature_name
+        ),
+        None,
     )
+    if armature_node_index is None:
+        return
+
+    armature_node = nodes[armature_node_index]
+    armature_children = list(armature_node.get("children", []))
+    if not armature_children:
+        return
+
+    scene_index = gltf.get("scene", 0)
+    scenes = gltf.get("scenes", [])
+    if not scenes or scene_index >= len(scenes):
+        return
+
+    scene_nodes = list(scenes[scene_index].get("nodes", []))
+    replacement_nodes: list[int] = []
+    for node_index in scene_nodes:
+        if node_index == armature_node_index:
+            replacement_nodes.extend(
+                child for child in armature_children if child not in replacement_nodes
+            )
+        elif node_index not in replacement_nodes:
+            replacement_nodes.append(node_index)
+    scenes[scene_index]["nodes"] = replacement_nodes
+
+    # Leave the Blender armature object as an unused node, but detach the bone
+    # hierarchy so glTF consumers see the humanoid root directly.
+    armature_node["children"] = []
+
+    json_chunk = json.dumps(gltf, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    json_chunk += b" " * ((4 - len(json_chunk) % 4) % 4)
+    total_length = 12 + 8 + len(json_chunk) + sum(8 + len(chunk) for _, chunk in chunks)
+
+    output = bytearray(struct.pack("<4sII", b"glTF", version, total_length))
+    output.extend(struct.pack("<II", len(json_chunk), 0x4E4F534A))
+    output.extend(json_chunk)
+    for chunk_type, chunk in chunks:
+        output.extend(struct.pack("<II", len(chunk), chunk_type))
+        output.extend(chunk)
+    glb_path.write_bytes(output)
+
+
+def gltf_node_translation(node: dict) -> list[float]:
+    return list(node.get("translation", [0.0, 0.0, 0.0]))
+
+
+def gltf_world_translations(nodes: list[dict]) -> dict[int, list[float]]:
+    parents: dict[int, int] = {}
+    for index, node in enumerate(nodes):
+        for child in node.get("children", []):
+            parents[child] = index
+
+    cache: dict[int, list[float]] = {}
+
+    def world_translation(index: int) -> list[float]:
+        if index in cache:
+            return cache[index]
+        local = gltf_node_translation(nodes[index])
+        parent_index = parents.get(index)
+        if parent_index is None:
+            cache[index] = local
+            return local
+        parent = world_translation(parent_index)
+        rotation = nodes[parent_index].get("rotation")
+        if rotation:
+            local = rotate_vector_by_quaternion(local, rotation)
+        result = [parent[axis] + local[axis] for axis in range(3)]
+        cache[index] = result
+        return result
+
+    return {index: world_translation(index) for index in range(len(nodes))}
+
+
+def rotate_vector_by_quaternion(vector: list[float], quaternion: list[float]) -> list[float]:
+    x, y, z, w = quaternion
+    vx, vy, vz = vector
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    return [
+        vx + w * tx + y * tz - z * ty,
+        vy + w * ty + z * tx - x * tz,
+        vz + w * tz + x * ty - y * tx,
+    ]
+
+
+def blender_world_to_gltf_yup(vector: Vector) -> list[float]:
+    return [float(vector.x), float(vector.z), float(-vector.y)]
+
+
+def armature_bone_head_positions_for_gltf_yup(
+    armature: bpy.types.Object,
+) -> dict[str, list[float]]:
+    return {
+        bone.name: blender_world_to_gltf_yup(armature.matrix_world @ bone.head_local)
+        for bone in armature.data.bones
+    }
+
+
+def gltf_yup_position(x: float, y: float, z: float) -> list[float]:
+    return [float(x), float(z), float(-y)]
+
+
+def humanoid_joint_positions_for_gltf_yup(
+    groups: dict[str, list[bpy.types.Object]], named_bones: dict[str, str]
+) -> dict[str, list[float]]:
+    all_bounds = combined_bounds(groups["all"])
+    full_size = bounds_size(all_bounds)
+    head_bounds = combined_bounds(groups["head"])
+    body_bounds = combined_bounds(groups.get("rig_body") or groups["body"])
+    left_hand_center = objects_average_center(groups["left_hand"])
+    right_hand_center = objects_average_center(groups["right_hand"])
+
+    center_x = (all_bounds[0].x + all_bounds[1].x) * 0.5
+    depth_y = (all_bounds[0].y + all_bounds[1].y) * 0.5
+    body_floor_z = body_bounds[0].z
+    hips_z = body_floor_z + full_size.z * 0.12
+    spine_z = body_floor_z + full_size.z * 0.28
+    chest_z = body_floor_z + full_size.z * 0.47
+    head_z = (head_bounds[0].z + head_bounds[1].z) * 0.5
+    if head_z <= chest_z:
+        head_z = chest_z + full_size.z * 0.24
+    neck_z = chest_z + (head_z - chest_z) * 0.45
+    shoulder_z = chest_z + (neck_z - chest_z) * 0.45
+
+    shoulder_span = max(body_bounds[1].x - body_bounds[0].x, full_size.x * 0.20, 0.12)
+    left_shoulder_x = center_x - shoulder_span * 0.16
+    right_shoulder_x = center_x + shoulder_span * 0.16
+    left_upper_arm_x = center_x - shoulder_span * 0.34
+    right_upper_arm_x = center_x + shoulder_span * 0.34
+    left_elbow = Vector(
+        (
+            left_upper_arm_x + (left_hand_center.x - left_upper_arm_x) * 0.55,
+            depth_y + (left_hand_center.y - depth_y) * 0.55,
+            shoulder_z + (left_hand_center.z - shoulder_z) * 0.55,
+        )
+    )
+    right_elbow = Vector(
+        (
+            right_upper_arm_x + (right_hand_center.x - right_upper_arm_x) * 0.55,
+            depth_y + (right_hand_center.y - depth_y) * 0.55,
+            shoulder_z + (right_hand_center.z - shoulder_z) * 0.55,
+        )
+    )
+
+    leg_x = max(full_size.x * 0.12, 0.05)
+    leg_root_z = all_bounds[0].z - 0.05
+    foot_z = all_bounds[0].z - 0.14
+    foot_y = depth_y + 0.04
+
+    blender_positions = {
+        named_bones["hips"]: Vector((center_x, depth_y, hips_z)),
+        named_bones["spine"]: Vector((center_x, depth_y, spine_z)),
+        named_bones["chest"]: Vector((center_x, depth_y, chest_z)),
+        named_bones["neck"]: Vector((center_x, depth_y, neck_z)),
+        named_bones["head"]: Vector((center_x, depth_y, head_z)),
+        named_bones["leftShoulder"]: Vector((left_shoulder_x, depth_y, shoulder_z)),
+        named_bones["leftUpperArm"]: Vector((left_upper_arm_x, depth_y, shoulder_z)),
+        named_bones["leftLowerArm"]: left_elbow,
+        named_bones["leftHand"]: left_hand_center,
+        named_bones["rightShoulder"]: Vector((right_shoulder_x, depth_y, shoulder_z)),
+        named_bones["rightUpperArm"]: Vector((right_upper_arm_x, depth_y, shoulder_z)),
+        named_bones["rightLowerArm"]: right_elbow,
+        named_bones["rightHand"]: right_hand_center,
+        named_bones["leftUpperLeg"]: Vector((center_x - leg_x, depth_y, hips_z)),
+        named_bones["leftLowerLeg"]: Vector((-leg_x, depth_y, leg_root_z)),
+        named_bones["leftFoot"]: Vector((-leg_x, foot_y, foot_z)),
+        named_bones["rightUpperLeg"]: Vector((center_x + leg_x, depth_y, hips_z)),
+        named_bones["rightLowerLeg"]: Vector((leg_x, depth_y, leg_root_z)),
+        named_bones["rightFoot"]: Vector((leg_x, foot_y, foot_z)),
+    }
+    return {
+        bone_name: blender_world_to_gltf_yup(position)
+        for bone_name, position in blender_positions.items()
+    }
+
+
+def patch_gltf_humanoid_joint_rest_orientations(
+    glb_path: Path, joint_world_translations: dict[str, list[float]]
+) -> None:
+    data = glb_path.read_bytes()
+    if data[:4] != b"glTF":
+        raise RuntimeError(f"Not a GLB file: {glb_path}")
+
+    version, length = struct.unpack_from("<II", data, 4)
+    offset = 12
+    json_chunk_index = -1
+    chunks: list[tuple[int, bytearray]] = []
+    gltf: dict | None = None
+    while offset < length:
+        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = bytearray(data[offset : offset + chunk_length])
+        offset += chunk_length
+        if chunk_type == 0x4E4F534A:
+            json_chunk_index = len(chunks)
+            gltf = json.loads(bytes(chunk).rstrip(b" \t\r\n\0").decode("utf-8"))
+        chunks.append((chunk_type, chunk))
+
+    if gltf is None or json_chunk_index < 0:
+        raise RuntimeError(f"GLB JSON chunk was not found: {glb_path}")
+    skins = gltf.get("skins", [])
+    if not skins:
+        return
+
+    skin = skins[0]
+    joints = list(skin.get("joints", []))
+    inverse_bind_accessor = skin.get("inverseBindMatrices")
+    if not joints or inverse_bind_accessor is None:
+        return
+
+    nodes = gltf.get("nodes", [])
+    exported_world_translations = gltf_world_translations(nodes)
+    before_world_translations = {
+        index: joint_world_translations.get(
+            nodes[index].get("name", ""), exported_world_translations[index]
+        )
+        for index in range(len(nodes))
+    }
+
+    for joint_index in joints:
+        node = nodes[joint_index]
+        node.pop("rotation", None)
+        node.pop("scale", None)
+
+    parents: dict[int, int] = {}
+    for index, node in enumerate(nodes):
+        for child in node.get("children", []):
+            parents[child] = index
+
+    for joint_index in joints:
+        parent_index = parents.get(joint_index)
+        world = before_world_translations[joint_index]
+        if parent_index in joints:
+            parent_world = before_world_translations[parent_index]
+            nodes[joint_index]["translation"] = [
+                world[axis] - parent_world[axis] for axis in range(3)
+            ]
+        else:
+            nodes[joint_index]["translation"] = world
+
+    accessors = gltf.get("accessors", [])
+    buffer_views = gltf.get("bufferViews", [])
+    accessor = accessors[inverse_bind_accessor]
+    buffer_view = buffer_views[accessor["bufferView"]]
+    bin_chunk_index = next(
+        (index for index, (chunk_type, _) in enumerate(chunks) if chunk_type == 0x004E4942),
+        None,
+    )
+    if bin_chunk_index is None:
+        return
+    bin_chunk = chunks[bin_chunk_index][1]
+    matrix_offset = buffer_view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    matrix_stride = buffer_view.get("byteStride", 64)
+
+    for matrix_index, joint_index in enumerate(joints):
+        world = before_world_translations[joint_index]
+        inverse_translation_matrix = (
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -world[0],
+            -world[1],
+            -world[2],
+            1.0,
+        )
+        struct.pack_into(
+            "<16f",
+            bin_chunk,
+            matrix_offset + matrix_index * matrix_stride,
+            *inverse_translation_matrix,
+        )
+
+    json_chunk = json.dumps(gltf, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    json_chunk += b" " * ((4 - len(json_chunk) % 4) % 4)
+    chunks[json_chunk_index] = (0x4E4F534A, bytearray(json_chunk))
+
+    total_length = 12 + sum(8 + len(chunk) for _, chunk in chunks)
+    output = bytearray(struct.pack("<4sII", b"glTF", version, total_length))
+    for chunk_type, chunk in chunks:
+        output.extend(struct.pack("<II", len(chunk), chunk_type))
+        output.extend(chunk)
+    glb_path.write_bytes(output)
+
+
+def export_rigged_glb(
+    output_path: Path,
+    armature: bpy.types.Object,
+    joint_world_translations: dict[str, list[float]],
+) -> Path:
+    rigged_glb = output_path.with_name(output_path.stem + ".rigged.glb")
+    detached = detach_meshes_from_armature_for_gltf(armature)
+    try:
+        deselect_all()
+        for obj in bpy.data.objects:
+            if obj.type in {"ARMATURE", "MESH"}:
+                obj.select_set(True)
+        export_options = {
+            "filepath": str(rigged_glb),
+            "export_format": "GLB",
+            "use_selection": True,
+            "export_skins": True,
+            "export_yup": True,
+        }
+        gltf_properties = bpy.ops.export_scene.gltf.get_rna_type().properties
+        if "export_armature_object" in gltf_properties:
+            export_options["export_armature_object"] = False
+        bpy.ops.export_scene.gltf(**export_options)
+        patch_gltf_scene_roots_for_detached_armature(rigged_glb, armature.name)
+        patch_gltf_humanoid_joint_rest_orientations(
+            rigged_glb, joint_world_translations
+        )
+    finally:
+        restore_detached_mesh_parents(detached)
     return rigged_glb
 
 
@@ -1843,7 +2216,7 @@ def main() -> None:
     if not groups["head"]:
         raise RuntimeError("Failed to detect head mesh parts.")
 
-    armature, named_bones = create_vrm_addon_armature(groups, import_bounds)
+    armature, named_bones = create_armature(groups)
     align_arm_bone_height_to_source_hands(groups, armature, named_bones)
     align_upper_body_bones_to_head_mesh(groups, armature, named_bones)
     align_hand_meshes_to_hand_bones(groups, armature, named_bones)
@@ -1857,6 +2230,9 @@ def main() -> None:
         f"body={len(groups['body'])}"
     )
     print(f"Placeholder foot boxes: {len(foot_boxes)}")
+    rigged_joint_world_translations = humanoid_joint_positions_for_gltf_yup(
+        groups, named_bones
+    )
     consolidated = consolidate_meshes_for_cluster(armature, groups, named_bones)
     align_joined_hand_meshes_to_hand_bones(armature, named_bones)
     rotate_joined_hand_meshes_around_hand_bone_x(armature, named_bones)
@@ -1864,7 +2240,9 @@ def main() -> None:
     remove_unexported_scene_objects(armature, consolidated)
     print(f"Consolidated mesh objects for export: {len(consolidated)}")
 
-    rigged_glb = export_rigged_glb(output_path)
+    rigged_glb = export_rigged_glb(
+        output_path, armature, rigged_joint_world_translations
+    )
     print(f"Rigged GLB exported to: {rigged_glb}")
 
     if args.keep_blend:
