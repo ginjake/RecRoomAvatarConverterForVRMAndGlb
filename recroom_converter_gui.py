@@ -30,6 +30,7 @@ class ConverterApp:
         self.blender_var = tk.StringVar(master=self.root, value=self._default_blender())
         self.addon_var = tk.StringVar(master=self.root)
         self.keep_blend_var = tk.BooleanVar(master=self.root, value=True)
+        self.pose_var = tk.StringVar(master=self.root, value="tpose")
 
         self._build_ui()
         self.root.after(100, self._drain_log_queue)
@@ -48,7 +49,7 @@ class ConverterApp:
         frame = ttk.Frame(self.root, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(7, weight=1)
 
         self._path_row(
             frame,
@@ -79,26 +80,64 @@ class ConverterApp:
             self._browse_addon,
         )
 
+        style = ttk.Style(self.root)
+        style.configure("Pose.TLabelframe.Label", font=("", 11, "bold"))
+        style.configure("Pose.TRadiobutton", font=("", 12, "bold"))
+
+        pose_frame = ttk.LabelFrame(
+            frame,
+            text="① 入力アバターのポーズ / Source pose",
+            style="Pose.TLabelframe",
+            padding=(12, 8),
+        )
+        pose_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 10))
+        pose_buttons = ttk.Frame(pose_frame)
+        pose_buttons.pack(anchor="w")
+        ttk.Radiobutton(
+            pose_buttons,
+            text="T-Pose",
+            variable=self.pose_var,
+            value="tpose",
+            style="Pose.TRadiobutton",
+        ).pack(side="left")
+        ttk.Radiobutton(
+            pose_buttons,
+            text="A-Pose",
+            variable=self.pose_var,
+            value="apose",
+            style="Pose.TRadiobutton",
+        ).pack(side="left", padx=(24, 0))
+        ttk.Label(
+            pose_frame,
+            text=(
+                "Rec Roomでエクスポートしたときのポーズを選んでください。"
+                "違うポーズを選ぶと腕の位置が崩れます。\n"
+                "Select the pose used when exporting from Rec Room. "
+                "A wrong choice misplaces the arms."
+            ),
+            foreground="#b00020",
+        ).pack(anchor="w", pady=(6, 0))
+
         ttk.Checkbutton(
             frame,
             text="確認用の .blend ファイルも保存する / Save inspection .blend file",
             variable=self.keep_blend_var,
-        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 8))
+        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
         button_row = ttk.Frame(frame)
-        button_row.grid(row=4, column=2, sticky="e")
+        button_row.grid(row=5, column=2, sticky="e")
         self.run_button = ttk.Button(button_row, text="Convert", command=self._start)
         self.run_button.pack(side="left")
 
         self.status_var = tk.StringVar(master=self.root, value="Ready")
         ttk.Label(frame, textvariable=self.status_var).grid(
-            row=5, column=0, columnspan=3, sticky="w", pady=(4, 4)
+            row=6, column=0, columnspan=3, sticky="w", pady=(4, 4)
         )
 
         self.log_text = tk.Text(frame, wrap="word", height=24)
-        self.log_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        self.log_text.grid(row=7, column=0, columnspan=3, sticky="nsew")
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.log_text.yview)
-        scrollbar.grid(row=6, column=3, sticky="ns")
+        scrollbar.grid(row=7, column=3, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
     def _path_row(
@@ -184,6 +223,7 @@ class ConverterApp:
             keep_blend=bool(self.keep_blend_var.get()),
             skip_vrm=False,
             vrm_addon_source=addon_path,
+            pose=self.pose_var.get(),
         )
 
     def _start(self) -> None:

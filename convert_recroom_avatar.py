@@ -29,6 +29,7 @@ class ConversionRequest:
     keep_blend: bool = True
     skip_vrm: bool = False
     vrm_addon_source: Path | None = None
+    pose: str = "tpose"
 
 
 def default_config_path() -> Path:
@@ -57,6 +58,11 @@ def blender_script_path() -> Path:
     if candidate.is_file():
         return candidate
     return Path(__file__).with_name("recroom_to_vrm_blender.py").resolve()
+
+
+# Printed by recroom_to_vrm_blender.py right before main() runs. Keep both
+# literals in sync.
+BLENDER_SCRIPT_START_MARKER = "RecRoomConverter: conversion script started"
 
 
 def log_file_path() -> Path:
@@ -146,6 +152,7 @@ def build_request(args: argparse.Namespace, config: ConverterConfig) -> Conversi
         keep_blend=bool(args.keep_blend) or not bool(args.no_blend),
         skip_vrm=bool(args.skip_vrm),
         vrm_addon_source=vrm_addon_source,
+        pose=args.pose,
     )
 
 
@@ -166,6 +173,8 @@ def build_command(request: ConversionRequest) -> list[str]:
         command.append("--keep-blend")
     if request.skip_vrm:
         command.append("--skip-vrm")
+    if request.pose:
+        command.extend(["--pose", request.pose])
     if request.vrm_addon_source:
         command.extend(["--vrm-addon-source", str(request.vrm_addon_source)])
     return command
@@ -176,6 +185,7 @@ def run_conversion(
 ) -> int:
     append_log_line(f"Starting conversion: {request.input_glb} -> {request.output_vrm}")
     saw_error = False
+    script_started = False
     error_markers = (
         "Traceback (most recent call last):",
         "RuntimeError:",
@@ -194,12 +204,23 @@ def run_conversion(
     if process.stdout:
         for line in process.stdout:
             stripped = line.rstrip()
-            if any(marker in stripped for marker in error_markers):
+            if BLENDER_SCRIPT_START_MARKER in stripped:
+                script_started = True
+            # Errors printed before our Blender script starts come from
+            # Blender startup (e.g. unrelated user addons failing to register
+            # in background mode) and must not fail the conversion.
+            if script_started and any(marker in stripped for marker in error_markers):
                 saw_error = True
             append_log_line(stripped)
             if log_callback:
                 log_callback(stripped)
     exit_code = process.wait()
+    if not script_started:
+        saw_error = True
+        message = "Conversion script did not start inside Blender."
+        append_log_line(message)
+        if log_callback:
+            log_callback(message)
     if not request.skip_vrm and not request.output_vrm.is_file():
         saw_error = True
         message = f"Output VRM was not created: {request.output_vrm}"
@@ -241,6 +262,12 @@ def parse_args() -> argparse.Namespace:
         "--skip-vrm",
         action="store_true",
         help="Only generate a rigged GLB, even if a VRM addon is available.",
+    )
+    parser.add_argument(
+        "--pose",
+        choices=["tpose", "apose"],
+        default="tpose",
+        help="Pose of the source Rec Room export. Use apose for A-pose exports.",
     )
     parser.add_argument(
         "--vrm-addon-source",
