@@ -38,6 +38,7 @@ vendor/
 # Rec Room exported avatar data
 AvatarData*/
 AvatarData_*/
+/testAvatar/
 
 # User config (use recroom_converter.example.toml as template)
 recroom_converter.toml

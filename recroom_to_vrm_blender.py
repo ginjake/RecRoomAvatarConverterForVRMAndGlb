@@ -7,7 +7,7 @@ import re
 import shutil
 import struct
 import sys
-from math import pi
+from math import atan2, degrees, pi, radians
 from pathlib import Path
 
 import bpy
@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-blend", action="store_true")
     parser.add_argument("--skip-vrm", action="store_true")
     parser.add_argument("--vrm-addon-source")
+    parser.add_argument("--pose", choices=["tpose", "apose"], default="tpose")
     return parser.parse_args(argv)
 
 
@@ -1262,6 +1263,61 @@ def rotate_mesh_geometry_world(
         obj.data.update()
 
 
+def normalize_apose_hand_groups_to_tpose(
+    groups: dict[str, list[bpy.types.Object]],
+) -> None:
+    all_bounds = combined_bounds(groups["all"])
+    full_size = bounds_size(all_bounds)
+    head_bounds = combined_bounds(groups["head"])
+    body_bounds = combined_bounds(groups.get("rig_body") or groups["body"])
+
+    center_x = (all_bounds[0].x + all_bounds[1].x) * 0.5
+    chest_z = body_bounds[0].z + full_size.z * 0.47
+    neck_z = head_bounds[0].z + (head_bounds[1].z - head_bounds[0].z) * 0.12
+    shoulder_z = chest_z + (neck_z - chest_z) * 0.35
+    shoulder_span = max(body_bounds[1].x - body_bounds[0].x, 0.18) * 0.52
+    negative_shoulder_x = max(
+        min(center_x - 0.02, -0.01), body_bounds[0].x - shoulder_span * 0.1
+    )
+    positive_shoulder_x = min(
+        max(center_x + 0.02, 0.01), body_bounds[1].x + shoulder_span * 0.1
+    )
+
+    for group_key in ["left_hand", "right_hand"]:
+        objects = groups[group_key]
+        if not objects:
+            continue
+        hand_center = objects_average_center(objects)
+        shoulder_x = (
+            positive_shoulder_x if hand_center.x >= center_x else negative_shoulder_x
+        )
+        pivot = Vector((shoulder_x, hand_center.y, shoulder_z))
+        horizontal = abs(hand_center.x - pivot.x)
+        drop_angle = atan2(pivot.z - hand_center.z, max(horizontal, 1e-6))
+        if abs(drop_angle) < radians(5.0):
+            print(
+                f"A-pose normalization skipped for {group_key}: "
+                f"arm drop angle {degrees(drop_angle):.1f} deg is near T-pose."
+            )
+            continue
+        if abs(drop_angle) > radians(80.0):
+            print(
+                f"A-pose normalization skipped for {group_key}: "
+                f"arm drop angle {degrees(drop_angle):.1f} deg is out of range."
+            )
+            continue
+        # A positive rotation around world Y lifts points on the negative X side.
+        signed_angle = drop_angle if hand_center.x < pivot.x else -drop_angle
+        rotate_mesh_geometry_world(objects, signed_angle, "Y", pivot)
+        rotated_center = objects_average_center(objects)
+        print(
+            f"A-pose normalization applied to {group_key}: "
+            f"angle={degrees(drop_angle):.1f} deg, "
+            f"hand center z {hand_center.z:.3f} -> {rotated_center.z:.3f} "
+            f"(shoulder z {shoulder_z:.3f})"
+        )
+
+
 def align_arm_bone_height_to_source_hands(
     groups: dict[str, list[bpy.types.Object]],
     armature: bpy.types.Object,
@@ -1526,87 +1582,6 @@ def bind_meshes(
         obj.parent = armature
 
 
-def ensure_placeholder_material(name: str) -> bpy.types.Material:
-    material = bpy.data.materials.get(name)
-    if not material:
-        material = bpy.data.materials.new(name)
-    material.diffuse_color = (0.15, 0.45, 0.9, 0.0)
-    material.use_nodes = True
-    material.blend_method = "BLEND"
-    material.show_transparent_back = True
-    principled = next(
-        (node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"),
-        None,
-    )
-    if principled:
-        base_color_input = principled.inputs.get("Base Color")
-        if base_color_input:
-            base_color_input.default_value = (0.15, 0.45, 0.9, 0.0)
-        alpha_input = principled.inputs.get("Alpha")
-        if alpha_input:
-            alpha_input.default_value = 0.0
-    return material
-
-
-def create_box_mesh_object(
-    name: str, center: Vector, size: Vector, material: bpy.types.Material
-) -> bpy.types.Object:
-    half = size * 0.5
-    vertices = [
-        (center.x - half.x, center.y - half.y, center.z - half.z),
-        (center.x + half.x, center.y - half.y, center.z - half.z),
-        (center.x + half.x, center.y + half.y, center.z - half.z),
-        (center.x - half.x, center.y + half.y, center.z - half.z),
-        (center.x - half.x, center.y - half.y, center.z + half.z),
-        (center.x + half.x, center.y - half.y, center.z + half.z),
-        (center.x + half.x, center.y + half.y, center.z + half.z),
-        (center.x - half.x, center.y + half.y, center.z + half.z),
-    ]
-    faces = [
-        (0, 1, 2, 3),
-        (4, 7, 6, 5),
-        (0, 4, 5, 1),
-        (1, 5, 6, 2),
-        (2, 6, 7, 3),
-        (3, 7, 4, 0),
-    ]
-    mesh = bpy.data.meshes.new(name + "Mesh")
-    mesh.from_pydata(vertices, [], faces)
-    mesh.update()
-    mesh.materials.append(material)
-    obj = bpy.data.objects.new(name, mesh)
-    bpy.context.collection.objects.link(obj)
-    return obj
-
-
-def create_placeholder_foot_boxes(
-    armature: bpy.types.Object, named_bones: dict[str, str]
-) -> list[bpy.types.Object]:
-    material = ensure_placeholder_material("FootPlaceholder_Mat")
-    created: list[bpy.types.Object] = []
-    for object_name, bone_key in [
-        ("LeftFootPlaceholderBox", "leftFoot"),
-        ("RightFootPlaceholderBox", "rightFoot"),
-    ]:
-        bone_name = named_bones[bone_key]
-        pose_bone = armature.pose.bones[bone_name]
-        head = armature.matrix_world @ pose_bone.head
-        tail = armature.matrix_world @ pose_bone.tail
-        center = (head + tail) * 0.5
-        box = create_box_mesh_object(
-            object_name,
-            center + Vector((0.0, 0.0, -0.02)),
-            Vector((0.002, 0.002, 0.002)),
-            material,
-        )
-        add_armature_modifier(box, armature)
-        ensure_vertex_groups(box, [bone_name])
-        assign_entire_object(box, bone_name)
-        box.parent = armature
-        created.append(box)
-    return created
-
-
 def join_mesh_objects(
     objects: list[bpy.types.Object], joined_name: str, armature: bpy.types.Object
 ) -> bpy.types.Object | None:
@@ -1638,14 +1613,6 @@ def material_signature(obj: bpy.types.Object) -> tuple[str, ...]:
     )
 
 
-def is_foot_placeholder_object(obj: bpy.types.Object) -> bool:
-    if obj.type != "MESH":
-        return False
-    if obj.name.startswith(("LeftFootPlaceholderBox", "RightFootPlaceholderBox")):
-        return True
-    return any("FootPlaceholder_Mat" in name for name in material_names(obj))
-
-
 def consolidate_meshes_for_cluster(
     armature: bpy.types.Object,
     groups: dict[str, list[bpy.types.Object]],
@@ -1660,19 +1627,10 @@ def consolidate_meshes_for_cluster(
     left_hand_set = {obj for obj in groups["left_hand"] if obj in armature_meshes}
     right_hand_set = {obj for obj in groups["right_hand"] if obj in armature_meshes}
     head_set = {obj for obj in groups["head"] if obj in armature_meshes}
-    foot_placeholder_set = {
-        obj for obj in armature_meshes if is_foot_placeholder_object(obj)
-    }
-    preserved = left_hand_set | right_hand_set | head_set | foot_placeholder_set
+    preserved = left_hand_set | right_hand_set | head_set
     body_meshes = [obj for obj in armature_meshes if obj not in preserved]
 
     joined_objects: list[bpy.types.Object] = []
-    foot_joined = join_mesh_objects(
-        list(foot_placeholder_set), "Merged_FootPlaceholder_Mat", armature
-    )
-    if foot_joined:
-        joined_objects.append(foot_joined)
-
     head_joined = join_mesh_objects(list(head_set), "MergedHead", armature)
     if head_joined:
         joined_objects.append(head_joined)
@@ -1749,7 +1707,6 @@ def try_setup_vrm(
         "MergedHead": "thirdPersonOnly",
         "MergedLeftHand": "both",
         "MergedRightHand": "both",
-        "Merged_FootPlaceholder_Mat": "thirdPersonOnly",
     }
     for object_name, first_person_type in first_person_mesh_types.items():
         obj = bpy.data.objects.get(object_name)
@@ -2216,12 +2173,14 @@ def main() -> None:
     if not groups["head"]:
         raise RuntimeError("Failed to detect head mesh parts.")
 
+    if args.pose == "apose":
+        normalize_apose_hand_groups_to_tpose(groups)
+
     armature, named_bones = create_armature(groups)
     align_arm_bone_height_to_source_hands(groups, armature, named_bones)
     align_upper_body_bones_to_head_mesh(groups, armature, named_bones)
     align_hand_meshes_to_hand_bones(groups, armature, named_bones)
     bind_meshes(groups, armature, named_bones)
-    foot_boxes = create_placeholder_foot_boxes(armature, named_bones)
     print(
         "Classified parts: "
         f"head={len(groups['head'])}, "
@@ -2229,7 +2188,6 @@ def main() -> None:
         f"right_hand={len(groups['right_hand'])}, "
         f"body={len(groups['body'])}"
     )
-    print(f"Placeholder foot boxes: {len(foot_boxes)}")
     rigged_joint_world_translations = humanoid_joint_positions_for_gltf_yup(
         groups, named_bones
     )
@@ -2257,4 +2215,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Keep this marker in sync with BLENDER_SCRIPT_START_MARKER in
+    # convert_recroom_avatar.py. Errors printed before it (e.g. unrelated
+    # user addons failing to register in background mode) are not ours.
+    print("RecRoomConverter: conversion script started", flush=True)
     main()

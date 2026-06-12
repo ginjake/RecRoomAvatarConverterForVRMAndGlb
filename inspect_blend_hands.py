@@ -76,9 +76,6 @@ def main() -> None:
 
     print_mesh_binding("MergedLeftHand")
     print_mesh_binding("MergedRightHand")
-    print_mesh_binding("Merged_FootPlaceholder_Mat")
-    print_mesh_binding("LeftFootPlaceholderBox")
-    print_mesh_binding("RightFootPlaceholderBox")
     if armature:
         for bone_name in [
             "LeftUpperArm",
